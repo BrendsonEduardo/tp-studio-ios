@@ -5,7 +5,6 @@ import Network
 import QuartzCore
 import UIKit
 
-@MainActor
 final class BroadcastEngine: ObservableObject {
     // MARK: - Estado Publicado para a Interface SwiftUI
     @Published var stories: [StoryItem]
@@ -36,7 +35,6 @@ final class BroadcastEngine: ObservableObject {
     private var pingTimer: Timer?
 
     private var nwListener: NWListener?
-    private var embeddedWsConnections: [NWConnection] = []
 
     private let impactGenerator = UIImpactFeedbackGenerator(style: .medium)
     private let selectionGenerator = UISelectionFeedbackGenerator()
@@ -106,7 +104,6 @@ final class BroadcastEngine: ObservableObject {
 
         if !state.isPaused && !isWsConnectedToStudio && !manualScrubRecent {
             state.scrollY = max(0.0, state.scrollY + (state.speed * tickScale))
-            broadcastToEmbeddedClients(type: "SYNC_STATE")
         }
 
         // Interpolação Linear (LERP) acelerada por GPU
@@ -129,7 +126,6 @@ final class BroadcastEngine: ObservableObject {
         impactGenerator.impactOccurred()
         saveLocalState()
         sendStudioUpdate(type: "UPDATE_STATE", payload: ["isPaused": state.isPaused])
-        broadcastToEmbeddedClients(type: "TRANSPORT_COMMAND")
     }
 
     func setSpeed(_ newSpeed: Double) {
@@ -138,7 +134,6 @@ final class BroadcastEngine: ObservableObject {
         selectionGenerator.selectionChanged()
         saveLocalState()
         sendStudioUpdate(type: "UPDATE_STATE", payload: ["speed": clamped])
-        broadcastToEmbeddedClients(type: "SYNC_STATE")
     }
 
     func adjustSpeed(delta: Double) {
@@ -150,7 +145,6 @@ final class BroadcastEngine: ObservableObject {
         let clamped = max(0.0, scrollY)
         state.scrollY = clamped
         sendStudioUpdate(type: "UPDATE_STATE", payload: ["scrollY": clamped])
-        broadcastToEmbeddedClients(type: "SYNC_STATE")
     }
 
     func jumpToTop() {
@@ -159,7 +153,6 @@ final class BroadcastEngine: ObservableObject {
         renderedScrollY = 0.0
         saveLocalState()
         sendStudioUpdate(type: "UPDATE_STATE", payload: ["scrollY": 0.0])
-        broadcastToEmbeddedClients(type: "SYNC_STATE")
     }
 
     func selectStory(id: String, resetScroll: Bool = true) {
@@ -180,7 +173,6 @@ final class BroadcastEngine: ObservableObject {
                 "scrollY": state.scrollY
             ]
         )
-        broadcastToEmbeddedClients(type: "UPDATE_CONFIG")
     }
 
     func jumpToNextStory() {
@@ -202,7 +194,6 @@ final class BroadcastEngine: ObservableObject {
         selectionGenerator.selectionChanged()
         saveLocalState()
         sendStudioUpdate(type: "UPDATE_CONFIG", payload: ["flipH": state.flipH])
-        broadcastToEmbeddedClients(type: "UPDATE_CONFIG")
     }
 
     func toggleFlipVertical() {
@@ -210,7 +201,6 @@ final class BroadcastEngine: ObservableObject {
         selectionGenerator.selectionChanged()
         saveLocalState()
         sendStudioUpdate(type: "UPDATE_CONFIG", payload: ["flipV": state.flipV])
-        broadcastToEmbeddedClients(type: "UPDATE_CONFIG")
     }
 
     func applyHardwareProfile(_ profile: IPhoneHardwareProfile) {
@@ -229,7 +219,6 @@ final class BroadcastEngine: ObservableObject {
                 "cueLinePercent": state.cueLinePercent
             ]
         )
-        broadcastToEmbeddedClients(type: "UPDATE_CONFIG")
     }
 
     func updateVisualGeometry(fontSize: Double? = nil, margin: Double? = nil, cueLine: Double? = nil) {
@@ -245,7 +234,6 @@ final class BroadcastEngine: ObservableObject {
                 "cueLinePercent": state.cueLinePercent
             ]
         )
-        broadcastToEmbeddedClients(type: "UPDATE_CONFIG")
     }
 
     // MARK: - Gestão da Escaleta (Rundown) e Editor de Laudas
@@ -276,7 +264,6 @@ final class BroadcastEngine: ObservableObject {
         state.text = text
         saveLocalState()
         sendStudioUpdate(type: "UPDATE_CONFIG", payload: ["text": text])
-        broadcastToEmbeddedClients(type: "UPDATE_CONFIG")
     }
 
     func deleteStories(at offsets: IndexSet) {
@@ -348,9 +335,7 @@ final class BroadcastEngine: ObservableObject {
         receiveNextWebSocketMessage()
 
         pingTimer = Timer.scheduledTimer(withTimeInterval: 2.5, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                self?.sendPingCheck()
-            }
+            self?.sendPingCheck()
         }
     }
 
@@ -364,7 +349,7 @@ final class BroadcastEngine: ObservableObject {
 
     private func receiveNextWebSocketMessage() {
         wsTask?.receive { [weak self] result in
-            Task { @MainActor in
+            DispatchQueue.main.async {
                 guard let self = self else { return }
                 switch result {
                 case .success(let message):
@@ -461,14 +446,14 @@ final class BroadcastEngine: ObservableObject {
             let listener = try NWListener(using: params, on: nwPort)
 
             listener.stateUpdateHandler = { [weak self] newState in
-                Task { @MainActor in
+                DispatchQueue.main.async {
                     self?.isEmbeddedServerRunning = (newState == .ready)
                     self?.deviceWiFiIP = Self.readLocalWiFiIPAddress() ?? "172.16.1.73"
                 }
             }
 
             listener.newConnectionHandler = { [weak self] connection in
-                Task { @MainActor in
+                DispatchQueue.main.async {
                     self?.handleEmbeddedConnection(connection)
                 }
             }
@@ -483,7 +468,7 @@ final class BroadcastEngine: ObservableObject {
     private func handleEmbeddedConnection(_ connection: NWConnection) {
         connection.start(queue: .main)
         connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, _, _ in
-            Task { @MainActor in
+            DispatchQueue.main.async {
                 guard let self = self, let data = data, let requestStr = String(data: data, encoding: .utf8) else {
                     connection.cancel()
                     return
@@ -581,10 +566,6 @@ final class BroadcastEngine: ObservableObject {
         })
     }
 
-    private func broadcastToEmbeddedClients(type: String) {
-        // Ponto de extensão para clientes WebSocket diretos quando conectados ao iPhone
-    }
-
     // MARK: - Suporte Nativo a Controle Bluetooth / Pedal / Gamepad (GameController.framework)
     private func setupGameControllerObservers() {
         NotificationCenter.default.addObserver(
@@ -592,9 +573,7 @@ final class BroadcastEngine: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in
-                self?.bindConnectedGamepad()
-            }
+            self?.bindConnectedGamepad()
         }
         bindConnectedGamepad()
     }
@@ -607,21 +586,21 @@ final class BroadcastEngine: ObservableObject {
         connectedGamepadName = controller.vendorName ?? "Controle Bluetooth"
         controller.extendedGamepad?.buttonA.pressedChangedHandler = { [weak self] _, _, pressed in
             if pressed {
-                Task { @MainActor in
+                DispatchQueue.main.async {
                     self?.togglePlayPause()
                 }
             }
         }
         controller.extendedGamepad?.leftShoulder.pressedChangedHandler = { [weak self] _, _, pressed in
             if pressed {
-                Task { @MainActor in
+                DispatchQueue.main.async {
                     self?.jumpToPreviousStory()
                 }
             }
         }
         controller.extendedGamepad?.rightShoulder.pressedChangedHandler = { [weak self] _, _, pressed in
             if pressed {
-                Task { @MainActor in
+                DispatchQueue.main.async {
                     self?.jumpToNextStory()
                 }
             }
@@ -666,9 +645,6 @@ private final class DisplayLinkProxy {
         self.engine = engine
     }
     @objc func onFrame(_ link: CADisplayLink) {
-        Task { @MainActor in
-            engine?.stepDisplayFrame(timestamp: link.timestamp)
-        }
+        engine?.stepDisplayFrame(timestamp: link.timestamp)
     }
 }
-
