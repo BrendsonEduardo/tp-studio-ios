@@ -1,0 +1,43 @@
+  name: Build Native Swift iOS App (.ipa)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'ios-swift/**'
+
+jobs:
+  build-ios:
+    name: Compile Swift iOS App (iPhone 12 to 17 Pro Max)
+    runs-on: macos-14
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Build Unsigned iOS Archive (Xcode)
+        working-directory: ios-swift
+        run: |
+          xcodebuild clean archive \
+            -project TeleprompterStudioIOS.xcodeproj \
+            -scheme TeleprompterStudioIOS \
+            -configuration Release \
+            -sdk iphoneos \
+            -archivePath $RUNNER_TEMP/TeleprompterStudioIOS.xcarchive \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Package .ipa Bundle for Sideloadly / AltStore / Diawi
+        run: |
+          mkdir -p $RUNNER_TEMP/Payload
+          cp -r $RUNNER_TEMP/TeleprompterStudioIOS.xcarchive/Products/Applications/TeleprompterStudioIOS.app $RUNNER_TEMP/Payload/
+          cd $RUNNER_TEMP
+          zip -r TeleprompterStudioIOS.ipa Payload
+
+      - name: Upload Compiled .ipa Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TeleprompterStudioIOS-ipa
+          path: ${{ runner.temp }}/TeleprompterStudioIOS.ipa
+
